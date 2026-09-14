@@ -6,7 +6,7 @@
  */
 import prisma from '../db/prisma';
 import { config } from '../config';
-import { sourceSearchConversations, sourceGetAllMessages } from '../ghl/source';
+import { sourceSearchConversations, sourceGetAllMessages, sourceGetAllConversationsForContact } from '../ghl/source';
 import { createGhlClient } from '../ghl/client';
 import { findConversationByContact } from '../ghl/conversations';
 import { GhlConversation } from '../ghl/types';
@@ -56,26 +56,28 @@ export async function runHistoricalSync(options: SyncOptions = {}): Promise<Sync
   const dryRun = options.dryRun ?? false;
   if (dryRun) console.log('[DRY RUN] No changes will be written.');
 
-  // ── Mode 1: Contact ID ────────────────────────────────────────────────────
+  // ── Mode 1: Contact ID — sync ALL conversations for this contact ─────────
   if (options.contactId) {
     console.log(`[INFO] Contact ID mode: ${options.contactId}`);
+    console.log(`[INFO] Fetching ALL conversations for this contact...`);
 
-    const sourceClient = createGhlClient(config.source.accessToken);
-    const conversation = await findConversationByContact(
-      sourceClient,
-      config.source.locationId,
-      options.contactId
-    );
+    const conversations = await sourceGetAllConversationsForContact(options.contactId);
 
-    if (!conversation) {
-      console.log(`[INFO] No conversation found for contact ${options.contactId}`);
+    if (conversations.length === 0) {
+      console.log(`[INFO] No conversations found for contact ${options.contactId}`);
       printSummary(summary);
       return summary;
     }
 
-    console.log(`[INFO] Found conversation: ${conversation.id}`);
-    summary.totalConversations++;
-    await processSingleConversation(conversation.id, summary, dryRun, conversation);
+    console.log(`[INFO] Found ${conversations.length} conversation(s) — syncing all`);
+
+    for (const conversation of conversations) {
+      summary.totalConversations++;
+      console.log(`\n[INFO] Processing conversation: ${conversation.id}`);
+      await processSingleConversation(conversation.id, summary, dryRun, conversation);
+      await sleep(CONVERSATION_DELAY_MS);
+    }
+
     printSummary(summary);
     return summary;
   }

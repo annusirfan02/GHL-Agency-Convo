@@ -4,9 +4,9 @@
 import { config } from '../config';
 import { createGhlClient } from './client';
 import { lookupContactByEmail, getContact } from './contacts';
-import { searchConversations } from './conversations';
+import { searchConversations, findAllConversationsByContact } from './conversations';
 import { getAllMessages } from './messages';
-import { GhlContact, GhlMessage, GhlConversationSearchResponse } from './types';
+import { GhlContact, GhlMessage, GhlConversation, GhlConversationSearchResponse } from './types';
 
 const sourceClient = createGhlClient(config.source.accessToken);
 
@@ -25,6 +25,10 @@ export async function sourceSearchConversations(options: {
   endDate?: string;
 }): Promise<GhlConversationSearchResponse> {
   return searchConversations(sourceClient, config.source.locationId, options);
+}
+
+export async function sourceGetAllConversationsForContact(contactId: string): Promise<GhlConversation[]> {
+  return findAllConversationsByContact(sourceClient, config.source.locationId, contactId);
 }
 
 export async function sourceGetAllMessages(conversationId: string): Promise<GhlMessage[]> {

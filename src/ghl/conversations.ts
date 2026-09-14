@@ -39,6 +39,31 @@ export async function searchConversations(
 }
 
 /**
+ * Find ALL conversations for a contact in a specific location.
+ * A contact can have multiple conversations (SMS, Email, WhatsApp, FB, etc.)
+ */
+export async function findAllConversationsByContact(
+  client: AxiosInstance,
+  locationId: string,
+  contactId: string
+): Promise<GhlConversation[]> {
+  const response = await withRetry(() =>
+    client.get<GhlConversationSearchResponse>('/conversations/search', {
+      params: {
+        locationId,
+        contactId,
+        limit: 20,
+        sortBy: 'last_message_date',
+        sort: 'asc',
+        status: 'all',
+      },
+    })
+  );
+
+  return response.data.conversations ?? [];
+}
+
+/**
  * Find the most recent conversation for a contact in a specific location.
  */
 export async function findConversationByContact(
@@ -46,21 +71,8 @@ export async function findConversationByContact(
   locationId: string,
   contactId: string
 ): Promise<GhlConversation | null> {
-  const response = await withRetry(() =>
-    client.get<GhlConversationSearchResponse>('/conversations/search', {
-      params: {
-        locationId,
-        contactId,
-        limit: 1,
-        sortBy: 'last_message_date',
-        sort: 'desc',
-        status: 'all',
-      },
-    })
-  );
-
-  const conversations = response.data.conversations;
-  return (conversations && conversations.length > 0) ? conversations[0] ?? null : null;
+  const conversations = await findAllConversationsByContact(client, locationId, contactId);
+  return conversations.length > 0 ? conversations[0] ?? null : null;
 }
 
 /**
