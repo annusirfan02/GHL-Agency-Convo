@@ -1,0 +1,82 @@
+// Prisma schema for the GHL conversation sync tool.
+// Tracks contact, conversation, and message mappings to prevent duplicates
+// and support safe restarts of the historical migration.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Tracks which source contacts have been mapped to destination contacts
+model ContactMapping {
+  id                    String   @id @default(cuid())
+  email                 String   @unique
+  sourceContactId       String
+  destinationContactId  String
+  sourceLocationId      String
+  destinationLocationId String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([sourceContactId])
+  @@index([destinationContactId])
+  @@map("contact_mappings")
+}
+
+// Tracks which source conversations have been mapped to destination conversations
+model ConversationMapping {
+  id                          String   @id @default(cuid())
+  sourceConversationId        String   @unique
+  destinationConversationId   String
+  sourceContactId             String
+  destinationContactId        String
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@index([destinationConversationId])
+  @@map("conversation_mappings")
+}
+
+// Tracks which source messages have been synced to prevent duplicates.
+// status: 'synced' | 'skipped' | 'failed'
+model MessageMapping {
+  id                          String   @id @default(cuid())
+  sourceMessageId             String   @unique
+  destinationMessageId        String?
+  sourceConversationId        String
+  destinationConversationId   String
+  status                      String   @default("synced")
+  errorReason                 String?
+  createdAt                   DateTime @default(now())
+
+  @@index([sourceConversationId])
+  @@index([destinationConversationId])
+  @@index([status])
+  @@map("message_mappings")
+}
+
+// Tracks the overall sync progress of source conversations.
+// status: 'pending' | 'in_progress' | 'completed' | 'failed'
+model SyncProgress {
+  id                   String   @id @default(cuid())
+  sourceConversationId String   @unique
+  sourceContactId      String
+  status               String   @default("pending")
+  totalMessages        Int      @default(0)
+  syncedMessages       Int      @default(0)
+  skippedMessages      Int      @default(0)
+  failedMessages       Int      @default(0)
+  errorReason          String?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([status])
+  @@index([sourceContactId])
+  @@map("sync_progress")
+}
