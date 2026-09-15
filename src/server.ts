@@ -15,7 +15,6 @@ import { runHistoricalSync } from './sync/historicalSync';
 
 const app = express();
 
-// ── Middleware ────────────────────────────────────────────────────────────────
 app.use(
   express.json({
     verify: (req: Request & { rawBody?: string }, _res: Response, buf: Buffer) => {
@@ -31,15 +30,9 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Trigger historical sync via HTTP (Railway-friendly)
-// POST /sync
-// Optional body: { "startDate": "2026-01-01", "endDate": "2026-09-14", "conversationId": "abc123", "dryRun": true }
+// Trigger historical GHL→GHL sync (kept for backward compat)
 app.post('/sync', async (req: Request, res: Response): Promise<void> => {
-  // Respond immediately — sync runs in background
-  res.json({
-    status: 'started',
-    message: 'Historical sync started in background. Check Railway logs for progress.',
-  });
+  res.json({ status: 'started', message: 'Sync started. Check Railway logs.' });
 
   const { startDate, endDate, conversationId, contactId, dryRun } = req.body as {
     startDate?: string;
@@ -53,10 +46,32 @@ app.post('/sync', async (req: Request, res: Response): Promise<void> => {
 
   runHistoricalSync({ startDate, endDate, conversationId, contactId, dryRun: dryRun ?? false })
     .then(() => console.log('[SYNC] Historical sync finished'))
-    .catch((err: unknown) => console.error('[SYNC] Historical sync error:', (err as Error).message));
+    .catch((err: unknown) => console.error('[SYNC] Error:', (err as Error).message));
 });
 
-// Real-time GHL webhook
+// Trigger Google Sheet export via HTTP
+// POST /export
+// Body: { "contactId": "xxx", "dryRun": true }
+app.post('/export', async (req: Request, res: Response): Promise<void> => {
+  res.json({ status: 'started', message: 'Sheet export started. Check Railway logs.' });
+
+  const { contactId, startDate, endDate, dryRun } = req.body as {
+    contactId?: string;
+    startDate?: string;
+    endDate?: string;
+    dryRun?: boolean;
+  };
+
+  console.log('[EXPORT] Google Sheet export triggered via HTTP');
+
+  // Dynamically import to avoid loading googleapis unless needed
+  import('./sheet/sheetExportRunner').then(m =>
+    m.runSheetExport({ contactId, startDate, endDate, dryRun: dryRun ?? false })
+      .then(() => console.log('[EXPORT] Sheet export finished'))
+      .catch((err: unknown) => console.error('[EXPORT] Error:', (err as Error).message))
+  ).catch((err: unknown) => console.error('[EXPORT] Import error:', (err as Error).message));
+});
+
 app.use('/webhooks/ghl', ghlWebhookRouter);
 
 app.use((_req: Request, res: Response) => {
@@ -64,7 +79,7 @@ app.use((_req: Request, res: Response) => {
 });
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('[ERROR] Unhandled exception:', err.message);
+  console.error('[ERROR]', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 
