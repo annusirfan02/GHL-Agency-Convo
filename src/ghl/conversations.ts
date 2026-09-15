@@ -1,5 +1,6 @@
 /**
  * GHL Conversations API wrappers.
+ * Only search and findAll are needed for CSV export.
  */
 import { AxiosInstance } from 'axios';
 import { GhlConversation, GhlConversationSearchResponse } from './types';
@@ -7,16 +8,15 @@ import { withRetry } from './client';
 
 /**
  * Search/paginate conversations in a location.
- * Uses startAfterDate for cursor-based pagination over large result sets.
  */
 export async function searchConversations(
   client: AxiosInstance,
   locationId: string,
   options: {
     limit?: number;
-    startAfterDate?: number;  // epoch ms — last document's sort value
-    startDate?: string;       // ISO date filter
-    endDate?: string;         // ISO date filter
+    startAfterDate?: number;
+    startDate?: string;
+    endDate?: string;
   } = {}
 ): Promise<GhlConversationSearchResponse> {
   const params: Record<string, unknown> = {
@@ -40,7 +40,7 @@ export async function searchConversations(
 
 /**
  * Find ALL conversations for a contact in a specific location.
- * A contact can have multiple conversations (SMS, Email, WhatsApp, FB, etc.)
+ * One contact can have multiple conversations (SMS, Email, WhatsApp, FB, etc.)
  */
 export async function findAllConversationsByContact(
   client: AxiosInstance,
@@ -61,35 +61,5 @@ export async function findAllConversationsByContact(
   );
 
   return response.data.conversations ?? [];
-}
-
-/**
- * Find the most recent conversation for a contact in a specific location.
- */
-export async function findConversationByContact(
-  client: AxiosInstance,
-  locationId: string,
-  contactId: string
-): Promise<GhlConversation | null> {
-  const conversations = await findAllConversationsByContact(client, locationId, contactId);
-  return conversations.length > 0 ? conversations[0] ?? null : null;
-}
-
-/**
- * Create a new conversation for a contact in a location.
- */
-export async function createConversation(
-  client: AxiosInstance,
-  locationId: string,
-  contactId: string
-): Promise<GhlConversation> {
-  const response = await withRetry(() =>
-    client.post<{ success: boolean; conversation: GhlConversation }>('/conversations/', {
-      locationId,
-      contactId,
-    })
-  );
-
-  return response.data.conversation;
 }
 
