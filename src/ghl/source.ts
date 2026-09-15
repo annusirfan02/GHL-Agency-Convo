@@ -1,9 +1,10 @@
 /**
- * Pre-configured GHL API client and helpers for the SOURCE subaccount.
+ * Pre-configured GHL API client for the SOURCE subaccount (Agency 1).
+ * Used for reading data to export to Google Sheet.
  */
 import { config } from '../config';
 import { createGhlClient } from './client';
-import { lookupContactByEmail, getContact } from './contacts';
+import { getContact } from './contacts';
 import { searchConversations, findAllConversationsByContact } from './conversations';
 import { getAllMessages } from './messages';
 import { GhlContact, GhlMessage, GhlConversation, GhlConversationSearchResponse } from './types';
@@ -12,10 +13,6 @@ const sourceClient = createGhlClient(config.source.accessToken);
 
 export async function sourceGetContactById(contactId: string): Promise<GhlContact | null> {
   return getContact(sourceClient, contactId);
-}
-
-export async function sourceLookupContactByEmail(email: string): Promise<GhlContact | null> {
-  return lookupContactByEmail(sourceClient, config.source.locationId, email);
 }
 
 export async function sourceSearchConversations(options: {
@@ -27,7 +24,9 @@ export async function sourceSearchConversations(options: {
   return searchConversations(sourceClient, config.source.locationId, options);
 }
 
-export async function sourceGetAllConversationsForContact(contactId: string): Promise<GhlConversation[]> {
+export async function sourceGetAllConversationsForContact(
+  contactId: string
+): Promise<GhlConversation[]> {
   return findAllConversationsByContact(sourceClient, config.source.locationId, contactId);
 }
 

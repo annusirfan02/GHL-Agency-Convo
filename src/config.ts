@@ -9,6 +9,10 @@ function requireEnv(key: string): string {
   return val;
 }
 
+function optionalEnv(key: string): string {
+  return process.env[key] ?? '';
+}
+
 export const config = {
   port: parseInt(process.env.PORT ?? '3000', 10),
 
@@ -17,10 +21,16 @@ export const config = {
     locationId:  requireEnv('SOURCE_GHL_LOCATION_ID'),
   },
 
+  // Destination is optional — only needed for GHL→GHL sync
   destination: {
-    accessToken: requireEnv('DESTINATION_GHL_ACCESS_TOKEN'),
-    locationId:  requireEnv('DESTINATION_GHL_LOCATION_ID'),
+    accessToken: optionalEnv('DESTINATION_GHL_ACCESS_TOKEN'),
+    locationId:  optionalEnv('DESTINATION_GHL_LOCATION_ID'),
   },
 
   verifyWebhookSignature: process.env.VERIFY_WEBHOOK_SIGNATURE === 'true',
+
+  googleSheet: {
+    spreadsheetId: optionalEnv('GOOGLE_SHEET_ID'),
+    sheetName:     process.env.GOOGLE_SHEET_NAME ?? 'Sheet1',
+  },
 };
