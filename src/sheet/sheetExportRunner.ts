@@ -3,10 +3,14 @@
  *
  * GHL Agency 1 → Google Sheet
  *
- * Format: 1 contact = 1 row
- * Column D = all messages in one cell, line by line:
- *   [Jan 10, 10:00 AM] Inbound SMS: Hi
- *   [Jan 10, 10:05 AM] Outbound SMS: Hello
+ * Format: 1 message = 1 row
+ *
+ * A            B              C      D                   E        F          G               H
+ * Contact Name Email          Phone  Date & Time         Channel  Direction  Message         Attachments
+ * ──────────────────────────────────────────────────────────────────────────────────────────────────────
+ * John Smith   john@test.com  +1555  Jan 10, 10:00 AM    SMS      Inbound    Hi
+ * John Smith   john@test.com  +1555  Jan 10, 10:05 AM    SMS      Outbound   Hello!
+ * John Smith   john@test.com  +1555  Jan 11, 09:00 AM    Email    Inbound    I need pricing
  */
 import { config } from '../config';
 import { createGhlClient } from '../ghl/client';
@@ -15,11 +19,11 @@ import { searchConversations, findAllConversationsByContact } from '../ghl/conve
 import { getAllMessages, isActivityMessage } from '../ghl/messages';
 import {
   ensureHeaders,
-  getExistingEmails,
-  appendContactRows,
+  getExistingRows,
+  appendRows,
   formatChannel,
   formatDate,
-  ContactSheetRow,
+  MessageRow,
 } from './googleSheets';
 
 const DELAY_MS = 300;
@@ -39,34 +43,32 @@ export async function runSheetExport(options: ExportOptions = {}): Promise<void>
   const spreadsheetId = process.env.GOOGLE_SHEET_ID
     ?? '1IjlAgHCIj0Iw4HjwT_pRTkmnO8SX9q2QdKlPAoGTII0';
 
-  if (!spreadsheetId) throw new Error('GOOGLE_SHEET_ID is not set');
-
   const sheetName = process.env.GOOGLE_SHEET_NAME ?? 'Sheet1';
   const dryRun    = options.dryRun ?? false;
 
   console.log('[EXPORT] GHL → Google Sheet Export');
-  console.log(`[EXPORT] Source location: ${config.source.locationId}`);
-  console.log(`[EXPORT] Sheet: ${spreadsheetId} / tab: ${sheetName}`);
+  console.log(`[EXPORT] Source: ${config.source.locationId}`);
+  console.log(`[EXPORT] Sheet: ${spreadsheetId} / ${sheetName}`);
   if (dryRun) console.log('[EXPORT] DRY RUN — nothing will be written');
   console.log('');
 
   const sourceClient = createGhlClient(config.source.accessToken);
 
-  // Write headers if sheet is empty
+  // Write headers if empty
   if (!dryRun) {
     await ensureHeaders(spreadsheetId, sheetName);
   }
 
-  // Get already-exported emails to avoid duplicates
-  const existingEmails = dryRun
+  // Get existing rows to prevent duplicates
+  const existingKeys = dryRun
     ? new Set<string>()
-    : await getExistingEmails(spreadsheetId, sheetName);
+    : await getExistingRows(spreadsheetId, sheetName);
 
   let totalContacts      = 0;
   let totalConversations = 0;
   let totalMessages      = 0;
-  let writtenContacts    = 0;
-  let skippedContacts    = 0;
+  let writtenRows        = 0;
+  let skippedRows        = 0;
 
   // ── Process one contact ──────────────────────────────────────────────────
   async function processContact(contactId: string): Promise<void> {
@@ -80,14 +82,7 @@ export async function runSheetExport(options: ExportOptions = {}): Promise<void>
     console.log(`\n[CONTACT] ${contactName} | ${email}`);
     totalContacts++;
 
-    // Skip if already in sheet
-    if (email && existingEmails.has(email)) {
-      console.log(`[CONTACT] Already exported — skipping`);
-      skippedContacts++;
-      return;
-    }
-
-    // Get all conversations for this contact
+    // Get all conversations
     const conversations = await findAllConversationsByContact(
       sourceClient,
       config.source.locationId,
@@ -97,11 +92,7 @@ export async function runSheetExport(options: ExportOptions = {}): Promise<void>
     console.log(`[CONTACT] ${conversations.length} conversation(s)`);
     totalConversations += conversations.length;
 
-    // Collect all messages across all conversations
-    const allMessageLines: string[] = [];
-    const channelSet = new Set<string>();
-    let firstDate = '';
-    let lastDate  = '';
+    const rows: MessageRow[] = [];
 
     for (const conv of conversations) {
       const messages = await getAllMessages(sourceClient, conv.id);
@@ -109,64 +100,55 @@ export async function runSheetExport(options: ExportOptions = {}): Promise<void>
       totalMessages += messages.length;
 
       for (const msg of messages) {
-        if (isActivityMessage(msg.messageType)) continue;
+        // Skip activity messages
+        if (isActivityMessage(msg.messageType)) {
+          skippedRows++;
+          continue;
+        }
 
-        const channel        = formatChannel(msg.messageType);
-        const date           = formatDate(msg.dateAdded);
-        const direction      = msg.direction === 'inbound' ? 'Inbound' : 'Outbound';
-        const body           = (msg.body ?? '').replace(/\n/g, ' ').trim();
-        const hasAttachment  = (msg.attachments ?? []).length > 0;
+        const channel    = formatChannel(msg.messageType);
+        const dateTime   = formatDate(msg.dateAdded);
+        const direction  = msg.direction === 'inbound' ? 'Inbound' : 'Outbound';
+        const message    = (msg.body ?? '').trim();
+        const attachments = (msg.attachments ?? []).join(', ');
 
-        let line = `[${date}] ${direction} ${channel}: ${body}`;
-        if (hasAttachment) line += ' 📎';
+        // Dedup key
+        const key = `${email}|${dateTime}|${direction}|${message.substring(0, 50)}`;
+        if (existingKeys.has(key)) {
+          skippedRows++;
+          continue;
+        }
 
-        allMessageLines.push(line);
-        channelSet.add(channel);
+        rows.push({
+          contactName,
+          email,
+          phone,
+          dateTime,
+          channel,
+          direction,
+          message,
+          attachments,
+        });
 
-        if (!firstDate) firstDate = date;
-        lastDate = date;
+        existingKeys.add(key);
       }
 
       await sleep(DELAY_MS);
     }
 
-    if (allMessageLines.length === 0) {
-      console.log(`[CONTACT] No messages — skipping`);
-      skippedContacts++;
-      return;
-    }
-
-    // Build row — truncate conversation if too long (Google Sheets limit: 50000 chars)
-    const fullConversation = allMessageLines.join('\n');
-    const MAX_CHARS = 49000;
-    const conversation = fullConversation.length > MAX_CHARS
-      ? fullConversation.substring(0, MAX_CHARS) + '\n... [truncated — too many messages]'
-      : fullConversation;
-
-    const row: ContactSheetRow = {
-      contactName,
-      email,
-      phone,
-      conversation,
-      channelsUsed:  Array.from(channelSet).join(', '),
-      totalMessages: allMessageLines.length,
-      firstMessage:  firstDate,
-      lastMessage:   lastDate,
-    };
-
     if (dryRun) {
-      console.log(`[DRY RUN] Would write 1 row for ${contactName}`);
-      console.log(`[DRY RUN] Messages: ${allMessageLines.length} | Channels: ${row.channelsUsed}`);
-      allMessageLines.slice(0, 3).forEach(l => console.log(`          ${l}`));
-      if (allMessageLines.length > 3) {
-        console.log(`          ... and ${allMessageLines.length - 3} more`);
+      console.log(`[DRY RUN] Would write ${rows.length} rows for ${contactName}`);
+      if (rows.length > 0) {
+        rows.slice(0, 3).forEach(r =>
+          console.log(`          [${r.dateTime}] ${r.direction} ${r.channel}: ${r.message.substring(0, 60)}`)
+        );
+        if (rows.length > 3) console.log(`          ... and ${rows.length - 3} more`);
       }
-      writtenContacts++;
-    } else {
-      await appendContactRows(spreadsheetId!, [row], sheetName);
-      if (email) existingEmails.add(email);
-      writtenContacts++;
-      console.log(`[CONTACT] Written to sheet ✅`);
+      writtenRows += rows.length;
+    } else if (rows.length > 0) {
+      const written = await appendRows(spreadsheetId!, rows, sheetName);
+      writtenRows += written;
+      console.log(`[CONTACT] Written ${written} rows to sheet ✅`);
     }
   }
 
@@ -197,8 +179,6 @@ export async function runSheetExport(options: ExportOptions = {}): Promise<void>
         break;
       }
 
-      console.log(`[EXPORT] ${conversations.length} conversations`);
-
       for (const conv of conversations) {
         if (!conv.contactId) continue;
         if (processedContacts.has(conv.contactId)) continue;
@@ -207,11 +187,11 @@ export async function runSheetExport(options: ExportOptions = {}): Promise<void>
         await sleep(DELAY_MS);
       }
 
-      const last     = conversations[conversations.length - 1];
+      const last = conversations[conversations.length - 1];
       if (!last) break;
       const lastDate = last.lastMessageDate ?? last.dateAdded;
       if (!lastDate) break;
-      const lastMs   = new Date(lastDate).getTime();
+      const lastMs = new Date(lastDate).getTime();
       if (lastMs === startAfterDate) break;
       startAfterDate = lastMs;
       if (conversations.length < 20) break;
@@ -223,13 +203,13 @@ export async function runSheetExport(options: ExportOptions = {}): Promise<void>
   console.log(' EXPORT COMPLETE');
   console.log('═'.repeat(55));
   console.log(`  Contacts      : ${totalContacts}`);
-  console.log(`  Written       : ${writtenContacts}`);
-  console.log(`  Skipped       : ${skippedContacts}`);
   console.log(`  Conversations : ${totalConversations}`);
   console.log(`  Messages      : ${totalMessages}`);
+  console.log(`  Written rows  : ${writtenRows}`);
+  console.log(`  Skipped       : ${skippedRows}`);
   console.log('═'.repeat(55));
 
-  if (!dryRun && writtenContacts > 0) {
+  if (!dryRun && writtenRows > 0) {
     console.log(`\n✅ https://docs.google.com/spreadsheets/d/${spreadsheetId}`);
   }
 }

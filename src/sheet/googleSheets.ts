@@ -2,44 +2,37 @@
  * googleSheets.ts
  *
  * Google Sheets API wrapper.
- * Format: 1 contact = 1 row
- *         All messages in one cell (column D)
+ * Format: 1 message = 1 row
  */
 import { google } from 'googleapis';
 
-// Column headers
 export const SHEET_HEADERS = [
-  'Contact Name',     // A
-  'Email',            // B
-  'Phone',            // C
-  'Conversation',     // D — all messages in one cell
-  'Channels Used',    // E
-  'Total Messages',   // F
-  'First Message',    // G
-  'Last Message',     // H
+  'Contact Name',   // A
+  'Email',          // B
+  'Phone',          // C
+  'Date & Time',    // D
+  'Channel',        // E
+  'Direction',      // F
+  'Message',        // G
+  'Attachments',    // H
 ];
 
-export interface ContactSheetRow {
-  contactName:    string;
-  email:          string;
-  phone:          string;
-  conversation:   string;  // all messages combined in one cell
-  channelsUsed:   string;  // e.g. "SMS, Email, WhatsApp"
-  totalMessages:  number;
-  firstMessage:   string;  // date of first message
-  lastMessage:    string;  // date of last message
+export interface MessageRow {
+  contactName:  string;
+  email:        string;
+  phone:        string;
+  dateTime:     string;
+  channel:      string;
+  direction:    string;
+  message:      string;
+  attachments:  string;
 }
 
 function getAuthClient() {
-  const credentialsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!credentialsJson) {
-    throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON environment variable is not set');
-  }
-
-  const credentials = JSON.parse(credentialsJson);
-
+  const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!json) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not set');
   return new google.auth.GoogleAuth({
-    credentials,
+    credentials: JSON.parse(json),
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
 }
@@ -54,12 +47,12 @@ export async function ensureHeaders(
   const auth   = getAuthClient();
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const response = await sheets.spreadsheets.values.get({
+  const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${sheetName}!A1:H1`,
   });
 
-  const existing = response.data.values;
+  const existing = res.data.values;
   if (!existing || existing.length === 0 || !existing[0] || existing[0].length === 0) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
@@ -67,39 +60,16 @@ export async function ensureHeaders(
       valueInputOption: 'RAW',
       requestBody: { values: [SHEET_HEADERS] },
     });
-
-    // Bold the header row
-    const sheetId = await getSheetId(spreadsheetId, sheetName);
-    if (sheetId !== null) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [
-            {
-              repeatCell: {
-                range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
-                cell: {
-                  userEnteredFormat: {
-                    textFormat: { bold: true },
-                    backgroundColor: { red: 0.2, green: 0.6, blue: 0.9 },
-                  },
-                },
-                fields: 'userEnteredFormat(textFormat,backgroundColor)',
-              },
-            },
-          ],
-        },
-      });
-    }
-
     console.log('[SHEET] Headers written');
   }
 }
 
 /**
- * Get existing emails from column B to prevent duplicate contacts.
+ * Get all existing Message IDs to prevent duplicates.
+ * We use Email+DateTime+Direction as a unique key stored in a hidden column,
+ * or simply track by row count. Here we use email+dateTime combination.
  */
-export async function getExistingEmails(
+export async function getExistingRows(
   spreadsheetId: string,
   sheetName = 'Sheet1'
 ): Promise<Set<string>> {
@@ -107,31 +77,38 @@ export async function getExistingEmails(
   const sheets = google.sheets({ version: 'v4', auth });
 
   try {
-    const response = await sheets.spreadsheets.values.get({
+    // Read Email (B) + Date (D) + Direction (F) columns to build dedup key
+    const res = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!B2:B`,
+      range: `${sheetName}!B2:H`,
     });
 
-    const values = response.data.values ?? [];
-    const emails = new Set<string>();
+    const values = res.data.values ?? [];
+    const keys   = new Set<string>();
+
     for (const row of values) {
-      if (row[0]) emails.add(row[0].toLowerCase().trim());
+      const email     = row[0] ?? '';
+      const date      = row[2] ?? '';
+      const direction = row[4] ?? '';
+      const message   = (row[5] ?? '').substring(0, 50);
+      if (email && date) {
+        keys.add(`${email}|${date}|${direction}|${message}`);
+      }
     }
 
-    console.log(`[SHEET] Found ${emails.size} existing contacts`);
-    return emails;
+    console.log(`[SHEET] Found ${keys.size} existing rows`);
+    return keys;
   } catch {
     return new Set<string>();
   }
 }
 
 /**
- * Append contact rows to the sheet.
- * Each contact = 1 row, conversation in one cell with line breaks.
+ * Append message rows in batches of 500.
  */
-export async function appendContactRows(
+export async function appendRows(
   spreadsheetId: string,
-  rows: ContactSheetRow[],
+  rows: MessageRow[],
   sheetName = 'Sheet1'
 ): Promise<number> {
   if (rows.length === 0) return 0;
@@ -139,85 +116,38 @@ export async function appendContactRows(
   const auth   = getAuthClient();
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const values = rows.map(row => [
-    row.contactName,
-    row.email,
-    row.phone,
-    row.conversation,     // multi-line cell
-    row.channelsUsed,
-    row.totalMessages,
-    row.firstMessage,
-    row.lastMessage,
+  const values = rows.map(r => [
+    r.contactName,
+    r.email,
+    r.phone,
+    r.dateTime,
+    r.channel,
+    r.direction,
+    r.message,
+    r.attachments,
   ]);
 
-  // Use USER_ENTERED so newlines (\n) render as line breaks in cells
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${sheetName}!A:H`,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values },
-  });
+  const BATCH = 500;
+  let written = 0;
 
-  // Set row height and wrap text for the conversation column
-  const sheetId = await getSheetId(spreadsheetId, sheetName);
-  if (sheetId !== null) {
-    // Get current last row number to apply formatting
-    const currentData = await sheets.spreadsheets.values.get({
+  for (let i = 0; i < values.length; i += BATCH) {
+    const batch = values.slice(i, i + BATCH);
+    await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A:A`,
+      range: `${sheetName}!A:H`,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: batch },
     });
-    const lastRow = (currentData.data.values?.length ?? 1);
-    const startRow = lastRow - rows.length;
+    written += batch.length;
+    console.log(`[SHEET] Written ${written}/${values.length} rows`);
 
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [
-          // Wrap text in conversation column (D = index 3)
-          {
-            repeatCell: {
-              range: {
-                sheetId,
-                startRowIndex: startRow,
-                endRowIndex: lastRow,
-                startColumnIndex: 3,
-                endColumnIndex: 4,
-              },
-              cell: {
-                userEnteredFormat: {
-                  wrapStrategy: 'WRAP',
-                  verticalAlignment: 'TOP',
-                },
-              },
-              fields: 'userEnteredFormat(wrapStrategy,verticalAlignment)',
-            },
-          },
-        ],
-      },
-    });
+    if (i + BATCH < values.length) {
+      await new Promise(r => setTimeout(r, 300));
+    }
   }
 
-  console.log(`[SHEET] Written ${rows.length} contact row(s)`);
-  return rows.length;
-}
-
-async function getSheetId(
-  spreadsheetId: string,
-  sheetName: string
-): Promise<number | null> {
-  try {
-    const auth   = getAuthClient();
-    const sheets = google.sheets({ version: 'v4', auth });
-
-    const response = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheet = response.data.sheets?.find(
-      s => s.properties?.title === sheetName
-    );
-    return sheet?.properties?.sheetId ?? null;
-  } catch {
-    return null;
-  }
+  return written;
 }
 
 /**
