@@ -1,17 +1,15 @@
 /**
  * server.ts
  *
- * Simple HTTP server with two endpoints:
+ * Simple HTTP server:
  *   GET  /health  — health check
  *   POST /export  — trigger GHL → Google Sheet export
  */
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import { config } from './config';
-import prisma from './db/prisma';
 
 const app = express();
-
 app.use(express.json());
 
 // ── Health check ──────────────────────────────────────────────────────────────
@@ -22,10 +20,10 @@ app.get('/health', (_req: Request, res: Response) => {
 // ── Google Sheet Export ───────────────────────────────────────────────────────
 // POST /export
 // Body (all optional):
-//   { "contactId": "xxx" }          → single contact
-//   { "dryRun": true }              → preview only
-//   { "startDate": "2026-01-01" }   → date filter
-//   {}                              → all contacts
+//   { "contactId": "xxx" }        → single contact
+//   { "dryRun": true }            → preview only
+//   { "startDate": "2026-01-01" } → date filter
+//   {}                            → all contacts
 app.post('/export', async (req: Request, res: Response): Promise<void> => {
   res.json({
     status: 'started',
@@ -66,29 +64,9 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-async function start(): Promise<void> {
-  // Run DB migrations on startup
-  const { execSync } = await import('child_process');
-  try {
-    execSync('npx prisma migrate deploy', { stdio: 'inherit' });
-    console.log('[DB] Migrations complete');
-  } catch (err) {
-    console.error('[DB] Migration failed:', err);
-    process.exit(1);
-  }
-
-  await prisma.$connect();
-  console.log('[DB] Connected');
-
-  app.listen(config.port, () => {
-    console.log(`[SERVER] Running on port ${config.port}`);
-    console.log(`[CONFIG] Source location: ${config.source.locationId}`);
-    console.log('[SERVER] POST /export');
-    console.log('[SERVER] GET  /health');
-  });
-}
-
-start().catch((err: unknown) => {
-  console.error('[FATAL]', err);
-  process.exit(1);
+app.listen(config.port, () => {
+  console.log(`[SERVER] Running on port ${config.port}`);
+  console.log(`[CONFIG] Source location: ${config.source.locationId}`);
+  console.log('[SERVER] POST /export');
+  console.log('[SERVER] GET  /health');
 });
