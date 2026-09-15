@@ -36,7 +36,9 @@ export interface ExportOptions {
 }
 
 export async function runSheetExport(options: ExportOptions = {}): Promise<void> {
-  const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID
+    ?? '1IjlAgHCIj0Iw4HjwT_pRTkmnO8SX9q2QdKlPAoGTII0';
+
   if (!spreadsheetId) throw new Error('GOOGLE_SHEET_ID is not set');
 
   const sheetName = process.env.GOOGLE_SHEET_NAME ?? 'Sheet1';
@@ -134,12 +136,18 @@ export async function runSheetExport(options: ExportOptions = {}): Promise<void>
       return;
     }
 
-    // Build row
+    // Build row — truncate conversation if too long (Google Sheets limit: 50000 chars)
+    const fullConversation = allMessageLines.join('\n');
+    const MAX_CHARS = 49000;
+    const conversation = fullConversation.length > MAX_CHARS
+      ? fullConversation.substring(0, MAX_CHARS) + '\n... [truncated — too many messages]'
+      : fullConversation;
+
     const row: ContactSheetRow = {
       contactName,
       email,
       phone,
-      conversation:  allMessageLines.join('\n'),
+      conversation,
       channelsUsed:  Array.from(channelSet).join(', '),
       totalMessages: allMessageLines.length,
       firstMessage:  firstDate,
